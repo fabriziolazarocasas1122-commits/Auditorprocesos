@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AuditaProcesos</title>
+  <meta name="description" content="Sistema web gratuito para planificar, ejecutar e informar auditorías de procesos.">
+  <link rel="icon" type="image/png" href="img/detecto-cara.png">
+  <meta name="theme-color" content="#0f1d40">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar no-print">
+    <a class="brand" href="#/">
+      <span class="logo"><img src="img/detecto-cara.png" alt=""></span>
+      <span>AuditaProcesos<small>CON DETECTO</small></span>
+    </a>
+    <nav class="mainnav">
+      <a href="#/" data-nav="inicio">Auditorías</a>
+      <a href="#/plantillas" data-nav="plantillas">Plantillas</a>
+      <a href="#/metodologia" data-nav="metodologia">Metodología</a>
+    </nav>
+  </header>
+
+  <div id="storage-warning" class="banner warn no-print" hidden>
+    El navegador no permite guardar datos (modo privado o bloqueo de almacenamiento). Puedes trabajar,
+    pero <strong>exporta tu auditoría en .json</strong> antes de cerrar la página.
+  </div>
+
+  <main id="app" class="container" aria-live="polite"></main>
+
+  <footer class="footer no-print">
+    Los datos se guardan solo en este navegador. Para respaldar o compartir con otro auditor, usa <em>Exportar .json</em>.
+  </footer>
+
+  <input type="file" id="file-input" accept=".json,application/json" hidden>
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="js/plantillas.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
