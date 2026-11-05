@@ -301,3 +301,16 @@ table { border-collapse: collapse; width: 100%; font-size: .88rem; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .btn.primary { background: var(--lime); border-color: var(--lime); color: #0f1d40; box-shadow: none; }
 }
+
+/* Código y OneDrive */
+.code { display: inline-block; font-size: .7em; vertical-align: middle; background: var(--lime); color: #0f1d40; padding: 2px 8px; border-radius: 6px; font-weight: 700; letter-spacing: .02em; }
+.od-saved { margin: 4px 0 0; color: var(--ok); }
+.btn:disabled { opacity: .6; cursor: progress; }
+.od-status { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.od-bot { width: 56px; height: 56px; border-radius: 50%; background: #fff; flex: none; }
+.od-status h2 { margin: 0 0 2px; }
+.od-status p { margin: 0 0 2px; }
+.guide summary { cursor: pointer; }
+.guide ol { padding-left: 20px; }
+.guide li { margin-bottom: 8px; }
+code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-size: .88em; word-break: break-all; }

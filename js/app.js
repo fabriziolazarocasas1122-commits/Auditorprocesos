@@ -20,8 +20,8 @@
   ];
 
   // ---------- Estado ----------
-  var db = { auditorias: [], plantillas: [] };
-  var ui = { proc: {}, filtro: 'todos', incluirObs: false, draft: null, fileMode: null };
+  var db = { auditorias: [], plantillas: [], config: {} };
+  var ui = { proc: {}, filtro: 'todos', incluirObs: false, draft: null, fileMode: null, odBusy: false, odLista: null, odCargando: false };
   var app = document.getElementById('app');
 
   // ---------- Persistencia ----------
@@ -32,6 +32,7 @@
         var d = JSON.parse(raw);
         db.auditorias = Array.isArray(d.auditorias) ? d.auditorias : [];
         db.plantillas = Array.isArray(d.plantillas) ? d.plantillas : [];
+        db.config = d.config && typeof d.config === 'object' ? d.config : {};
       }
     } catch (e) { storageFail(); }
   }
@@ -69,12 +70,20 @@
     return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : esc(s);
   }
   function slug(s) { return String(s || 'auditoria').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50); }
-  function toast(msg) {
+  function toast(msg, ms) {
     var t = document.getElementById('toast');
     t.textContent = msg; t.hidden = false;
     clearTimeout(toast._t);
-    toast._t = setTimeout(function () { t.hidden = true; }, 2600);
+    toast._t = setTimeout(function () { t.hidden = true; }, ms || 2600);
   }
+  function siguienteCodigo(anio) {
+    anio = anio || String(new Date().getFullYear());
+    var max = 0, re = new RegExp('^AUD-' + anio + '-(\\d+)$');
+    db.auditorias.forEach(function (a) { var m = re.exec(a.codigo || ''); if (m) max = Math.max(max, +m[1]); });
+    return 'AUD-' + anio + '-' + pad(max + 1);
+  }
+  function baseNombre(a) { return (a.codigo ? a.codigo + '_' : '') + slug(a.titulo); }
+  function hora(iso) { try { var d = new Date(iso); return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); } catch (e) { return ''; } }
   function download(name, content, mime) {
     var blob = new Blob([content], { type: mime });
     var a = document.createElement('a');
@@ -147,7 +156,7 @@
 
   function nuevaAuditoria() {
     return {
-      id: uid('aud'), version: 1, titulo: '', organizacion: '', area: '', tipo: 'Interna',
+      id: uid('aud'), version: 1, codigo: siguienteCodigo(), titulo: '', organizacion: '', area: '', tipo: 'Interna',
       auditorLider: '', equipo: '', auditados: '', fechaInicio: hoy(), fechaFin: hoy(),
       objetivo: 'Verificar que los procedimientos auditados se cumplen y son eficaces, e identificar no conformidades y oportunidades de mejora.',
       alcance: '', criterios: '', estado: 'plan', procesos: [], respuestas: {}, extras: [], acciones: {},
@@ -163,6 +172,7 @@
     else if (p[0] === 'plantillas') html = vPlantillas();
     else if (p[0] === 'plantilla') html = vPlantilla(p[1]);
     else if (p[0] === 'metodologia') html = vMetodologia();
+    else if (p[0] === 'onedrive') html = vOneDrive();
     else if (p[0] === 'auditoria' && p[1] === 'nueva') html = vDatos(null);
     else if (p[0] === 'auditoria') {
       var a = getAud(p[1]);
@@ -190,6 +200,7 @@
       '<p>' + (list.length ? 'Tienes ' + list.length + ' auditoría' + (list.length > 1 ? 's' : '') + ' en este navegador. Continúa donde te quedaste o empieza una nueva.'
         : 'Planifica, verifica, registra hallazgos, genera el informe y da seguimiento al plan de acción. Ya tienes listas para admisión, atención médica, agendamiento, cuadre de caja y revisión documental.') + '</p>' +
       '<div class="actions"><a class="btn primary" href="#/auditoria/nueva">+ Nueva auditoría</a><button class="btn" data-action="importar-aud">Importar .json</button>' +
+      '<a class="btn" href="#/onedrive">Abrir desde OneDrive</a>' +
       (list.length ? '' : '<a class="btn" href="#/metodologia">Ver la metodología</a>') + '</div></div>' +
       '<img class="hero-bot" src="img/detecto.png" alt="Detecto, el asistente de auditoría"></section>';
     if (!list.length) return h;
@@ -198,7 +209,7 @@
     list.forEach(function (a) {
       var s = stats(a), nv = nivel(s.pct);
       h += '<article class="card aud-card">' +
-        '<div class="card-top"><span class="badge st-' + a.estado + '">' + ESTADOS_AUD[a.estado] + '</span><span class="muted small">' + fecha(a.fechaInicio) + '</span></div>' +
+        '<div class="card-top"><span class="badge st-' + a.estado + '">' + ESTADOS_AUD[a.estado] + '</span><span class="muted small">' + (a.codigo ? '<b>' + esc(a.codigo) + '</b> · ' : '') + fecha(a.fechaInicio) + (a.onedrive ? ' · <span title="Guardada en OneDrive">☁</span>' : '') + '</span></div>' +
         '<h3><a href="#/auditoria/' + a.id + '/ejecucion">' + esc(a.titulo || 'Auditoría sin título') + '</a></h3>' +
         '<p class="muted small">' + esc(a.organizacion || '') + (a.area ? ' · ' + esc(a.area) : '') + '</p>' +
         '<p class="small">' + a.procesos.map(function (p) { return '<span class="chip">' + esc(p.codigo) + '</span>'; }).join(' ') + '</p>' +
@@ -230,6 +241,7 @@
     if (nueva) h += '<section class="page-head"><div><a class="back" href="#/">← Auditorías</a><h1>Nueva auditoría</h1><p class="sub">Etapa 1 · Planificación</p></div></section>';
     h += '<form id="form-datos" class="panel" data-id="' + (nueva ? '' : a.id) + '">' +
       '<h2>Datos generales</h2><div class="grid2">' +
+      campo('Código de auditoría', 'codigo', a.codigo, 'text', ' placeholder="Ej.: AUD-2026-01"') +
       campo('Título de la auditoría *', 'titulo', a.titulo, 'text', ' required placeholder="Ej.: Auditoría interna de procesos ambulatorios 2026"') +
       campo('Organización', 'organizacion', a.organizacion, 'text', ' placeholder="Ej.: Detecta Clínica"') +
       campo('Área / unidad auditada', 'area', a.area) +
@@ -260,9 +272,11 @@
   function vAuditoria(a, etapa) {
     var s = stats(a);
     var h = '<section class="page-head aud-head no-print"><div><a class="back" href="#/">← Auditorías</a>' +
-      '<h1>' + esc(a.titulo || 'Auditoría sin título') + '</h1>' +
-      '<p class="sub">' + esc(a.organizacion) + (a.area ? ' · ' + esc(a.area) : '') + ' · <span class="badge st-' + a.estado + '">' + ESTADOS_AUD[a.estado] + '</span></p></div>' +
-      '<div class="actions"><button class="btn" data-action="exportar-aud" data-id="' + a.id + '">Exportar .json</button></div></section>';
+      '<h1>' + (a.codigo ? '<span class="code">' + esc(a.codigo) + '</span> ' : '') + esc(a.titulo || 'Auditoría sin título') + '</h1>' +
+      '<p class="sub">' + esc(a.organizacion) + (a.area ? ' · ' + esc(a.area) : '') + ' · <span class="badge st-' + a.estado + '">' + ESTADOS_AUD[a.estado] + '</span></p>' +
+      (a.onedrive ? '<p class="od-saved small">☁ Guardada en OneDrive el ' + hora(a.onedrive.fecha) + (a.onedrive.url ? ' · <a href="' + esc(a.onedrive.url) + '" target="_blank" rel="noopener">Abrir carpeta</a>' : '') + '</p>' : '') + '</div>' +
+      '<div class="actions"><button class="btn" data-action="exportar-aud" data-id="' + a.id + '">Exportar .json</button>' +
+      '<button class="btn primary" data-action="od-guardar" data-id="' + a.id + '"' + (ui.odBusy ? ' disabled' : '') + '>' + (ui.odBusy ? 'Guardando…' : '☁ Guardar en OneDrive') + '</button></div></section>';
     h += '<nav class="stepper no-print">' + ETAPAS.map(function (e) {
       return '<a href="#/auditoria/' + a.id + '/' + e.k + '" class="' + (e.k === etapa ? 'on' : '') + '"><b>' + e.n + '</b><span>' + e.t + '</span></a>';
     }).join('') + '</nav>';
@@ -387,13 +401,17 @@
 
   function vInforme(a, s) {
     var hs = hallazgos(a), c = conteoTipos(hs), nv = nivel(s.pct);
-    var h = '<div class="actions end no-print"><button class="btn" data-action="csv" data-id="' + a.id + '">Exportar Excel (.csv)</button>' +
-      '<button class="btn primary" data-action="imprimir">Imprimir / Guardar PDF</button></div>';
-    h += '<article class="report">' +
-      '<header class="rep-head"><div class="rep-brand"><img src="img/detecto-cara.png" alt=""><div><p class="muted small">INFORME DE AUDITORÍA ' + esc((a.tipo || '').toUpperCase()) + '</p><h1>' + esc(a.titulo || 'Auditoría') + '</h1><p>' + esc(a.organizacion) + '</p></div></div>' +
+    return '<div class="actions end no-print"><button class="btn" data-action="csv" data-id="' + a.id + '">Exportar Excel (.csv)</button>' +
+      '<button class="btn" data-action="informe-html" data-id="' + a.id + '">Descargar informe (.html)</button>' +
+      '<button class="btn primary" data-action="imprimir">Imprimir / Guardar PDF</button></div>' + reporte(a, s);
+  }
+  function reporte(a, s) {
+    var hs = hallazgos(a), c = conteoTipos(hs), nv = nivel(s.pct);
+    var h = '<article class="report">' +
+      '<header class="rep-head"><div class="rep-brand"><img src="img/detecto-cara.png" alt=""><div><p class="muted small">' + (a.codigo ? esc(a.codigo) + ' · ' : '') + 'INFORME DE AUDITORÍA ' + esc((a.tipo || '').toUpperCase()) + '</p><h1>' + esc(a.titulo || 'Auditoría') + '</h1><p>' + esc(a.organizacion) + '</p></div></div>' +
       '<div class="score ' + nv.c + '"><b>' + (s.pct == null ? '—' : s.pct + '%') + '</b><span>' + nv.t + '</span></div></header>' +
       '<h2>1. Datos generales</h2><table class="kv"><tbody>' +
-      kv('Área auditada', a.area) + kv('Auditor líder', a.auditorLider) + kv('Equipo auditor', a.equipo) +
+      kv('Código', a.codigo) + kv('Área auditada', a.area) + kv('Auditor líder', a.auditorLider) + kv('Equipo auditor', a.equipo) +
       kv('Fechas', fecha(a.fechaInicio) + ' – ' + fecha(a.fechaFin), true) + kv('Auditados / entrevistados', a.auditados) + kv('Estado', ESTADOS_AUD[a.estado]) +
       '</tbody></table>' +
       '<h2>2. Objetivo, alcance y criterios</h2>' +
@@ -546,13 +564,29 @@
       case 'estado': a.estado = b.getAttribute('data-v'); touch(a); render(); toast(a.estado === 'cerrada' ? 'Auditoría cerrada' : 'Auditoría reabierta'); break;
       case 'imprimir': window.print(); break;
       case 'csv': exportCSV(getAud(id)); break;
+      case 'informe-html': { var ia = getAud(id); informeHTML(ia).then(function (html) { download(baseNombre(ia) + '_informe.html', html, 'text/html'); }); break; }
+      case 'od-guardar': guardarOneDrive(getAud(id)); break;
+      case 'od-login':
+        OneDrive.login().then(function () { render(); toast('Conectado a Microsoft'); }).catch(function (err) { toast(err.message || 'No se pudo iniciar sesión', 6000); });
+        break;
+      case 'od-logout': OneDrive.logout().then(function () { ui.odLista = null; render(); }); break;
+      case 'od-listar': listarOneDrive(); break;
+      case 'od-abrir': {
+        b.disabled = true; b.textContent = 'Abriendo…';
+        OneDrive.descargar(id).then(function (obj) { importarAud(obj && obj.data ? obj.data : obj); })
+          .catch(function (err) { toast(err.message, 6000); render(); });
+        break;
+      }
+      case 'od-borrar-config':
+        if (confirm('¿Quitar la configuración de OneDrive guardada en este navegador?')) { delete db.config.onedrive; save(true); aplicarConfig(); render(); }
+        break;
       case 'exportar-aud': {
         var ea = getAud(id);
-        download(slug(ea.titulo) + '.auditoria.json', JSON.stringify({ tipo: 'auditoria', app: 'AuditaProcesos', data: ea }, null, 2), 'application/json');
+        download(baseNombre(ea) + '_respaldo.json', jsonAud(ea), 'application/json');
         break;
       }
       case 'duplicar-aud': {
-        var c = clone(getAud(id)); c.id = uid('aud'); c.titulo = (c.titulo || 'Auditoría') + ' (copia)';
+        var c = clone(getAud(id)); c.id = uid('aud'); c.codigo = siguienteCodigo(); c.titulo = (c.titulo || 'Auditoría') + ' (copia)'; delete c.onedrive;
         c.respuestas = {}; c.extras = []; c.acciones = {}; c.estado = 'plan'; c.fortalezas = ''; c.conclusiones = '';
         c.creado = c.actualizado = new Date().toISOString();
         db.auditorias.push(c); save(true); render(); toast('Duplicada sin respuestas, lista para una nueva auditoría');
@@ -630,15 +664,24 @@
   app.addEventListener('change', function (e) { if (e.target.tagName === 'SELECT' || e.target.type === 'checkbox') onField(e); });
 
   app.addEventListener('submit', function (e) {
+    if (e.target.id === 'form-od') {
+      e.preventDefault();
+      var fo = new FormData(e.target), oc = {};
+      ['clientId', 'tenant', 'carpeta', 'sharepoint'].forEach(function (k) { oc[k] = (fo.get(k) || '').toString().trim(); });
+      if (oc.clientId && !/^[0-9a-f-]{36}$/i.test(oc.clientId)) { toast('El ID de aplicación debe tener el formato 00000000-0000-0000-0000-000000000000', 5000); return; }
+      db.config.onedrive = oc; save(true); aplicarConfig(); ui.odLista = null; render(); toast('Configuración guardada');
+      return;
+    }
     if (e.target.id !== 'form-datos') return;
     e.preventDefault();
     var f = e.target, fd = new FormData(f);
     var a = f.getAttribute('data-id') ? getAud(f.getAttribute('data-id')) : null;
     var nueva = !a;
     a = a || nuevaAuditoria();
-    ['titulo', 'organizacion', 'area', 'tipo', 'auditorLider', 'equipo', 'fechaInicio', 'fechaFin', 'auditados', 'objetivo', 'alcance', 'criterios'].forEach(function (k) { a[k] = (fd.get(k) || '').toString(); });
+    ['codigo', 'titulo', 'organizacion', 'area', 'tipo', 'auditorLider', 'equipo', 'fechaInicio', 'fechaFin', 'auditados', 'objetivo', 'alcance', 'criterios'].forEach(function (k) { a[k] = (fd.get(k) || '').toString(); });
     var ids = fd.getAll('plantillas');
     if (!ids.length) { toast('Elige al menos un proceso a auditar'); return; }
+    a.codigo = a.codigo.trim().toUpperCase() || siguienteCodigo((a.fechaInicio || '').slice(0, 4) || undefined);
     var actuales = a.procesos.map(function (p) { return p.plantillaId; });
     var quitar = a.procesos.filter(function (p) { return ids.indexOf(p.plantillaId) < 0; });
     var conResp = quitar.filter(function (p) { return itemsDe(p).some(function (it) { return a.respuestas[it.id] && a.respuestas[it.id].resultado; }); });
@@ -698,7 +741,9 @@
     });
     save(true); render(); toast(n ? n + ' plantilla(s) importada(s)' : 'No se encontró ninguna plantilla válida');
   }
-  function exportCSV(a) {
+  function exportCSV(a) { download(baseNombre(a) + '_resultados.csv', '\ufeff' + csvText(a), 'text/csv;charset=utf-8'); }
+  function jsonAud(a) { return JSON.stringify({ tipo: 'auditoria', app: 'AuditaProcesos', exportado: new Date().toISOString(), data: a }, null, 2); }
+  function csvText(a) {
     var rows = [['Proceso', 'Sección', 'N.°', 'Requisito', 'Referencia', 'Resultado', 'Evidencia', 'Tipo de hallazgo', 'Hallazgo', 'Causa raíz', 'Acción correctiva', 'Responsable', 'Fecha límite', 'Estado acción']];
     a.procesos.forEach(function (p) {
       var n = 0;
@@ -717,10 +762,120 @@
     var csv = rows.map(function (r) {
       return r.map(function (c) { c = c == null ? '' : String(c); return /[;"\n\r]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c; }).join(';');
     }).join('\r\n');
-    download(slug(a.titulo) + '.csv', '﻿' + csv, 'text/csv;charset=utf-8');
+    return csv;
+  }
+
+  // ---------- Informe autónomo (.html) ----------
+  var logoData = null;
+  function logoURL() {
+    if (logoData) return Promise.resolve(logoData);
+    return fetch('img/detecto-cara.png').then(function (r) { return r.blob(); }).then(function (b) {
+      return new Promise(function (ok) { var fr = new FileReader(); fr.onload = function () { ok(logoData = fr.result); }; fr.readAsDataURL(b); });
+    }).catch(function () { return ''; });
+  }
+  function cssActual() {
+    var out = [];
+    Array.prototype.forEach.call(document.styleSheets, function (sh) {
+      try { Array.prototype.forEach.call(sh.cssRules, function (r) { out.push(r.cssText); }); } catch (e) { /* hoja externa */ }
+    });
+    return out.join('\n');
+  }
+  function informeHTML(a) {
+    return logoURL().then(function (logo) {
+      var cuerpo = reporte(a, stats(a)).split('src="img/detecto-cara.png"').join('src="' + (logo || '') + '"');
+      return '<!doctype html>\n<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<title>' + esc((a.codigo ? a.codigo + ' · ' : '') + 'Informe de auditoría · ' + (a.titulo || '')) + '</title>' +
+        '<style>' + cssActual() + '\n.no-print{display:none!important}.print-only{display:block}</style></head>' +
+        '<body><main class="container">' + cuerpo + '</main></body></html>';
+    });
+  }
+
+  // ---------- OneDrive ----------
+  function configOD() {
+    var org = ((window.AUDITA_CONFIG || {}).onedrive) || {}, loc = (db.config && db.config.onedrive) || {}, out = {};
+    ['clientId', 'tenant', 'carpeta', 'sharepoint'].forEach(function (k) { out[k] = loc[k] || org[k] || ''; });
+    out.origen = loc.clientId ? 'navegador' : (org.clientId ? 'organizacion' : '');
+    return out;
+  }
+  function aplicarConfig() { if (window.OneDrive) OneDrive.setConfig(configOD()); }
+
+  function guardarOneDrive(a) {
+    if (!window.OneDrive || !OneDrive.configurado()) {
+      location.hash = '#/onedrive';
+      toast('Primero conecta el sistema con Microsoft (sección OneDrive)', 4500); return;
+    }
+    if (!a.codigo) { a.codigo = siguienteCodigo((a.fechaInicio || '').slice(0, 4) || undefined); touch(a); }
+    ui.odBusy = true; render();
+    var paso = OneDrive.cuenta() ? Promise.resolve() : OneDrive.login();
+    paso.then(function () { return informeHTML(a); }).then(function (html) {
+      var anio = (a.fechaInicio || hoy()).slice(0, 4);
+      return OneDrive.guardar([anio, a.codigo + ' ' + (a.titulo || 'Auditoría')], [
+        { nombre: a.codigo + '_respaldo.json', contenido: jsonAud(a), tipo: 'application/json' },
+        { nombre: a.codigo + '_resultados.csv', contenido: '\ufeff' + csvText(a), tipo: 'text/csv' },
+        { nombre: a.codigo + '_informe.html', contenido: html, tipo: 'text/html' }
+      ]);
+    }).then(function (r) {
+      a.onedrive = { ruta: r.ruta, url: r.url, fecha: new Date().toISOString(), por: (OneDrive.cuenta() || {}).correo || '' };
+      ui.odBusy = false; touch(a); save(true); render(); toast('Guardada en OneDrive: ' + r.ruta, 5000);
+    }).catch(function (err) {
+      ui.odBusy = false; render(); toast(err.message || 'No se pudo guardar en OneDrive', 7000);
+    });
+  }
+  function listarOneDrive() {
+    ui.odCargando = true; render();
+    var paso = OneDrive.cuenta() ? Promise.resolve() : OneDrive.login();
+    paso.then(function () { return OneDrive.listar(); }).then(function (l) { ui.odLista = l; })
+      .catch(function (err) { toast(err.message, 7000); })
+      .then(function () { ui.odCargando = false; render(); });
+  }
+
+  function vOneDrive() {
+    var c = configOD(), ok = window.OneDrive && OneDrive.configurado(), cu = ok && OneDrive.cuenta();
+    var h = '<section class="page-head"><div><h1>OneDrive / SharePoint</h1><p class="sub">Guarda cada auditoría (respaldo, Excel e informe) en la nube de la organización y ábrela desde cualquier equipo.</p></div></section>';
+    h += '<div class="panel od-status"><img src="img/detecto-cara.png" alt="" class="od-bot"><div class="grow">';
+    if (!ok) h += '<h2>Sin conectar</h2><p class="muted">Falta el <b>ID de aplicación</b> de Microsoft. Lo obtiene una sola vez el administrador al registrar la aplicación (instrucciones abajo).</p>';
+    else if (!cu) h += '<h2>Listo para conectar</h2><p class="muted">Inicia sesión con tu cuenta de Microsoft para guardar y abrir auditorías.</p>';
+    else h += '<h2>Conectado</h2><p class="muted">' + esc(cu.nombre) + ' · ' + esc(cu.correo) + '</p>';
+    if (ok) h += '<p class="small">Destino: <b>' + (c.sharepoint ? 'SharePoint ' + esc(c.sharepoint) : 'OneDrive de cada auditor') + '</b> › ' + esc(c.carpeta || 'Auditorías') + ' › año › código y título</p>';
+    h += '</div><div class="actions">' + (ok ? (cu ? '<button class="btn" data-action="od-logout">Cerrar sesión</button>' : '<button class="btn primary" data-action="od-login">Iniciar sesión con Microsoft</button>') : '') + '</div></div>';
+    if (ok) {
+      h += '<div class="panel"><div class="panel-head"><div><h2>Auditorías guardadas</h2><p class="muted small">Respaldos encontrados en la carpeta «' + esc(c.carpeta || 'Auditorías') + '». Al abrir uno se carga en este navegador.</p></div>' +
+        '<button class="btn" data-action="od-listar"' + (ui.odCargando ? ' disabled' : '') + '>' + (ui.odCargando ? 'Buscando…' : (ui.odLista ? 'Actualizar' : 'Buscar auditorías')) + '</button></div>';
+      if (ui.odLista && !ui.odLista.length) h += '<p class="muted">No se encontraron auditorías guardadas todavía.</p>';
+      if (ui.odLista && ui.odLista.length) {
+        h += '<table class="data"><thead><tr><th>Archivo</th><th>Carpeta</th><th>Modificado</th><th></th></tr></thead><tbody>';
+        ui.odLista.forEach(function (f) {
+          h += '<tr><td>' + esc(f.nombre) + '</td><td class="small">' + esc(f.carpeta) + '</td><td class="small">' + hora(f.fecha) + (f.por ? '<br>' + esc(f.por) : '') + '</td>' +
+            '<td><button class="btn sm" data-action="od-abrir" data-id="' + esc(f.id) + '">Abrir</button></td></tr>';
+        });
+        h += '</tbody></table>';
+      }
+      h += '</div>';
+    }
+    h += '<form id="form-od" class="panel"><h2>Configuración</h2>' +
+      (c.origen === 'organizacion' ? '<p class="small muted">Configurado por la organización en <code>js/config.js</code>. Puedes cambiarlo solo para este navegador.</p>' : '') +
+      '<div class="grid2">' +
+      campo('ID de aplicación (cliente) *', 'clientId', c.clientId, 'text', ' placeholder="00000000-0000-0000-0000-000000000000" autocomplete="off" spellcheck="false"') +
+      campo('ID de directorio (inquilino)', 'tenant', c.tenant || 'common', 'text', ' placeholder="common"') +
+      campo('Carpeta base', 'carpeta', c.carpeta || 'Auditorías') +
+      campo('Sitio de SharePoint (opcional)', 'sharepoint', c.sharepoint, 'text', ' placeholder="detecta.sharepoint.com/sites/Calidad"') +
+      '</div><p class="small muted">Deja SharePoint vacío para guardar en el OneDrive de cada auditor. Si lo llenas, todos guardan en la biblioteca del sitio (recomendado para el área de Calidad).</p>' +
+      '<div class="actions end">' + (db.config.onedrive ? '<button type="button" class="btn danger-t" data-action="od-borrar-config">Quitar configuración</button>' : '') +
+      '<button class="btn primary" type="submit">Guardar configuración</button></div></form>';
+    h += '<details class="panel guide"><summary><b>Cómo obtener el ID de aplicación (administrador, una sola vez)</b></summary><ol>' +
+      '<li>Entra a <a href="https://entra.microsoft.com" target="_blank" rel="noopener">entra.microsoft.com</a> con una cuenta con permisos de administrador › <b>Identidad › Aplicaciones › Registros de aplicaciones › Nuevo registro</b>.</li>' +
+      '<li>Nombre: <i>AuditaProcesos</i>. Tipos de cuenta: <b>Solo cuentas de este directorio organizativo</b>.</li>' +
+      '<li>URI de redirección: plataforma <b>Aplicación de página única (SPA)</b> con esta dirección exacta:<br><code class="copy">' + esc(window.OneDrive ? OneDrive.redirectUri() : '') + '</code></li>' +
+      '<li>Pulsa <b>Registrar</b> y copia el <b>Id. de aplicación (cliente)</b> y el <b>Id. de directorio (inquilino)</b>.</li>' +
+      '<li>En <b>Permisos de API › Microsoft Graph › Permisos delegados</b> agrega <code>User.Read</code> y <code>Files.ReadWrite</code>. Si usarán SharePoint, agrega también <code>Files.ReadWrite.All</code> y <code>Sites.Read.All</code>. Luego pulsa <b>Conceder consentimiento de administrador</b>.</li>' +
+      '<li>Pega los dos ID arriba, o ponlos en <code>js/config.js</code> del repositorio para que todos los auditores lo tengan listo.</li></ol>' +
+      '<p class="small muted">El sistema solo guarda y lee archivos en la carpeta indicada, usando la sesión de cada auditor. No hay servidores intermedios.</p></details>';
+    return h;
   }
 
   // ---------- Inicio ----------
   load();
+  aplicarConfig();
+  if (window.OneDrive && OneDrive.configurado()) OneDrive.init().then(function () { if (parts()[0] === 'onedrive') render(); }).catch(function () {});
   render();
 })();

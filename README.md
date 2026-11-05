@@ -33,6 +33,33 @@ Cualquier auditor puede **crear sus propias plantillas**, duplicar las existente
 
 Comparte ese enlace con los auditores. No necesitan instalar nada ni crear una cuenta.
 
+## Guardar en OneDrive / SharePoint
+
+Cada auditoría tiene un **código** (por ejemplo `AUD-2026-01`) y un botón **☁ Guardar en OneDrive** que sube tres archivos:
+
+```
+Auditorías/
+└── 2026/
+    └── AUD-2026-01 Auditoría interna procesos ambulatorios/
+        ├── AUD-2026-01_respaldo.json     ← para reabrir la auditoría en el sistema
+        ├── AUD-2026-01_resultados.csv    ← se abre en Excel
+        └── AUD-2026-01_informe.html      ← informe completo (se abre en el navegador y se imprime en PDF)
+```
+
+Desde la sección **OneDrive** del sistema se pueden buscar y abrir las auditorías guardadas desde cualquier equipo.
+
+### Configuración (una sola vez, la hace el administrador de Microsoft 365)
+
+1. Entra a [entra.microsoft.com](https://entra.microsoft.com) › **Identidad › Aplicaciones › Registros de aplicaciones › Nuevo registro**.
+2. Nombre: `AuditaProcesos`. Tipos de cuenta: **Solo cuentas de este directorio organizativo**.
+3. URI de redirección: plataforma **Aplicación de página única (SPA)** con
+   `https://fabriziolazarocasas1122-commits.github.io/Auditorprocesos/auth.html`
+4. Copia el **Id. de aplicación (cliente)** y el **Id. de directorio (inquilino)**.
+5. **Permisos de API › Microsoft Graph › Permisos delegados**: `User.Read`, `Files.ReadWrite`. Si guardarán en un sitio de SharePoint compartido, también `Files.ReadWrite.All` y `Sites.Read.All`. Pulsa **Conceder consentimiento de administrador**.
+6. Pega los ID en `js/config.js` (así todos los auditores lo tienen listo) o en la sección **OneDrive** del sistema.
+
+Para que todo el equipo guarde en una carpeta común del área de Calidad, llena `sharepoint` en `js/config.js` (por ejemplo `detecta.sharepoint.com/sites/Calidad`).
+
 ## Cómo se guardan los datos
 
 - Cada auditor guarda sus auditorías **en su propio navegador** (localStorage). Nada se envía a ningún servidor, lo que protege datos sensibles como historias clínicas.
@@ -60,6 +87,10 @@ index.html          Página principal
 css/styles.css      Estilos (modo claro/oscuro, impresión y celular)
 js/plantillas.js    Plantillas base de las listas de verificación
 js/app.js           Lógica de la aplicación
+js/config.js        Configuración de OneDrive de la organización
+js/onedrive.js      Conexión con OneDrive/SharePoint (Microsoft Graph)
+js/vendor/          Librería oficial de inicio de sesión de Microsoft (MSAL, licencia MIT)
+auth.html           Página de retorno del inicio de sesión de Microsoft
 img/                Mascota Detecto (logo e ilustraciones)
 ```
 
