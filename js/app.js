@@ -537,10 +537,11 @@
       ((m.asuntoEditado || m.mensajeEditado) ? '<button class="btn sm" data-action="correo-reset">Restablecer texto automático</button>' : '') + '</div>' +
       '<div class="actions end">' +
       '<button class="btn" data-action="correo-mailto" data-id="' + a.id + '"' + (ui.correoBusy ? ' disabled' : '') + '>Abrir en mi correo</button>' +
-      (od ? '<button class="btn primary" data-action="correo-outlook" data-id="' + a.id + '"' + (ui.correoBusy ? ' disabled' : '') + '>' + (ui.correoBusy ? 'Enviando…' : 'Enviar con Outlook') + '</button>' : '') + '</div>' +
-      '<p class="small muted">' + (od ? '<b>Enviar con Outlook</b> lo envía desde tu cuenta de Microsoft 365 con los archivos adjuntos. ' : '') +
-      '<b>Abrir en mi correo</b> descarga los archivos y abre tu correo con el mensaje listo: solo arrastra los archivos descargados al correo.' +
-      (od ? '' : ' Para enviarlo directamente con los adjuntos, conecta el sistema con Microsoft en la sección <a href="#/onedrive">OneDrive</a>.') + '</p>';
+      '<button class="btn primary btn-enviar" data-action="correo-enviar" data-id="' + a.id + '"' + (ui.correoBusy ? ' disabled' : '') + '>' + (ui.correoBusy ? 'Enviando…' : '➤ Enviar') + '</button></div>' +
+      (ui.correoAviso && !od ? '<div class="aviso"><b>El envío automático aún no está activado.</b> Para que el botón <b>Enviar</b> mande el correo solo, con los archivos adjuntos y desde tu cuenta, el sistema debe conectarse una sola vez con Microsoft 365. ' +
+        'Pide a Sistemas que registre la aplicación (los pasos están en la sección <a href="#/onedrive">OneDrive</a>). Mientras tanto, usa <b>Abrir en mi correo</b>.</div>' : '') +
+      '<p class="small muted"><b>Enviar</b> manda el correo directamente desde tu cuenta de Microsoft 365, con los archivos adjuntos. ' +
+      '<b>Abrir en mi correo</b> descarga los archivos y abre tu correo con el mensaje listo para que los adjuntes.</p>';
     if (m.historial.length) {
       h += '<div class="hist"><b class="small">Envíos realizados</b><ul>' + m.historial.slice().reverse().map(function (x) {
         return '<li class="small">' + hora(x.fecha) + ' · ' + esc(x.via) + ' · para ' + esc(x.para.join(', ')) + (x.cc && x.cc.length ? ' (CC ' + esc(x.cc.join(', ')) + ')' : '') + '</li>';
@@ -814,7 +815,15 @@
       }
       case 'firma-quitar': { var fq = firmas(a)[b.getAttribute('data-k')]; delete fq.img; delete fq.fecha; touch(a); rerender(); break; }
       case 'correo-reset': { var cr = correo(a); cr.asuntoEditado = false; cr.mensajeEditado = false; touch(a); rerender(); break; }
-      case 'correo-outlook': enviarOutlook(getAud(id)); break;
+      case 'correo-enviar': {
+        var ae = getAud(id);
+        if (!window.OneDrive || !OneDrive.configurado()) { ui.correoAviso = true; rerender(); break; }
+        var de = validarCorreo(ae); if (!de) break;
+        var adjs = adjuntosNombres(ae).map(function (x) { return x[0]; });
+        if (confirm('¿Enviar el correo ahora?\n\nPara: ' + de.para.join(', ') + (de.cc.length ? '\nCC: ' + de.cc.join(', ') : '') +
+          '\nAsunto: ' + de.asunto + '\nAdjuntos: ' + (adjs.length ? adjs.join(', ') : 'ninguno'))) enviarOutlook(ae);
+        break;
+      }
       case 'correo-mailto': abrirCorreo(getAud(id)); break;
       case 'od-login':
         OneDrive.login().then(function () { render(); toast('Conectado a Microsoft'); }).catch(function (err) { toast(err.message || 'No se pudo iniciar sesión', 6000); });

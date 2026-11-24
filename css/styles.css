@@ -345,3 +345,5 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 .pdf-light .firmas { margin-top: 40px; }
 
 @media (max-width: 760px) { .firma-grid { grid-template-columns: 1fr; } }
+.btn-enviar { min-width: 140px; font-weight: 700; }
+.aviso { margin: 12px 0 4px; padding: 12px 14px; border-radius: 8px; background: var(--warn-soft); color: var(--text); border-left: 4px solid var(--warn); font-size: .9rem; }
