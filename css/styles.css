@@ -314,3 +314,34 @@ table { border-collapse: collapse; width: 100%; font-size: .88rem; }
 .guide ol { padding-left: 20px; }
 .guide li { margin-bottom: 8px; }
 code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-size: .88em; word-break: break-all; }
+
+/* Firmas */
+.firma-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.firma-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; background: var(--surface); }
+.firma-prev { height: 110px; border: 1px dashed var(--line); border-radius: 8px; display: grid; place-items: center; background: #fff; margin-bottom: 10px; overflow: hidden; }
+.firma-prev img { max-height: 96px; max-width: 90%; }
+.pad { width: 100%; height: auto; aspect-ratio: 600 / 220; background: #fff; border: 2px dashed var(--brand); border-radius: 8px; touch-action: none; cursor: crosshair; display: block; margin-bottom: 10px; }
+.firmas > div { display: flex; flex-direction: column; align-items: center; }
+.firma-img { max-height: 80px; max-width: 220px; margin-bottom: 4px; }
+.firma-space { height: 80px; }
+.firmas span { width: 100%; }
+
+/* Correo */
+.correo .hint { margin: -8px 0 10px; }
+.adj-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 4px 0 6px; }
+.hist { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.hist ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* PDF: siempre en modo claro */
+.pdf-light {
+  --bg: #fff; --surface: #fff; --surface-2: #eef2f7; --text: #0f1d40; --muted: #4f5d75; --line: #d3dbe6;
+  --brand: #0a5fa6; --brand-soft: #e2f4fc; --lime: #c4d00d;
+  --ok: #15803d; --ok-soft: #dcfce7; --good: #0e7490; --good-soft: #cffafe; --warn: #b45309; --warn-soft: #fef3c7; --bad: #b91c1c; --bad-soft: #fee2e2;
+  background: #fff; color: #0f1d40; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+.pdf-light .report { border: 0; box-shadow: none; padding: 0; margin: 0; }
+.pdf-light .no-print { display: none !important; }
+.pdf-light .print-only { display: block; }
+.pdf-light .firmas { margin-top: 40px; }
+
+@media (max-width: 760px) { .firma-grid { grid-template-columns: 1fr; } }

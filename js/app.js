@@ -21,7 +21,7 @@
 
   // ---------- Estado ----------
   var db = { auditorias: [], plantillas: [], config: {} };
-  var ui = { proc: {}, filtro: 'todos', incluirObs: false, draft: null, fileMode: null, odBusy: false, odLista: null, odCargando: false };
+  var ui = { proc: {}, filtro: 'todos', incluirObs: false, draft: null, fileMode: null, odBusy: false, odLista: null, odCargando: false, pad: null, correoBusy: false };
   var app = document.getElementById('app');
 
   // ---------- Persistencia ----------
@@ -85,7 +85,7 @@
   function baseNombre(a) { return (a.codigo ? a.codigo + '_' : '') + slug(a.titulo); }
   function hora(iso) { try { var d = new Date(iso); return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); } catch (e) { return ''; } }
   function download(name, content, mime) {
-    var blob = new Blob([content], { type: mime });
+    var blob = content instanceof Blob ? content : new Blob([content], { type: mime });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = name;
@@ -179,11 +179,13 @@
       html = a ? vAuditoria(a, p[2] || 'ejecucion') : vNoEncontrado();
     } else html = vNoEncontrado();
     app.innerHTML = html;
+    if (ui.pad) iniciarPad();
     var sec = p[0] === 'plantilla' ? 'plantillas' : (p[0] === 'auditoria' || !p.length ? 'inicio' : p[0]);
     document.querySelectorAll('[data-nav]').forEach(function (n) { n.classList.toggle('active', n.getAttribute('data-nav') === sec); });
   }
   window.addEventListener('hashchange', function () {
     if (parts()[0] !== 'plantilla') ui.draft = null;
+    ui.pad = null;
     render(); window.scrollTo(0, 0);
   });
 
@@ -402,9 +404,230 @@
   function vInforme(a, s) {
     var hs = hallazgos(a), c = conteoTipos(hs), nv = nivel(s.pct);
     return '<div class="actions end no-print"><button class="btn" data-action="csv" data-id="' + a.id + '">Exportar Excel (.csv)</button>' +
-      '<button class="btn" data-action="informe-html" data-id="' + a.id + '">Descargar informe (.html)</button>' +
-      '<button class="btn primary" data-action="imprimir">Imprimir / Guardar PDF</button></div>' + reporte(a, s);
+      '<button class="btn" data-action="informe-html" data-id="' + a.id + '">Descargar .html</button>' +
+      '<button class="btn" data-action="imprimir">Imprimir</button>' +
+      '<button class="btn primary" data-action="pdf" data-id="' + a.id + '">Descargar PDF</button></div>' +
+      panelFirmas(a) + panelCorreo(a, s) + reporte(a, s);
   }
+
+  // ---------- Firmas ----------
+  var FIRMANTES = { auditor: 'Auditor líder', responsable: 'Responsable del área auditada' };
+  function firmas(a) {
+    a.firmas = a.firmas || {};
+    Object.keys(FIRMANTES).forEach(function (k) {
+      var f = a.firmas[k] = a.firmas[k] || {};
+      if (f.cargo == null) f.cargo = FIRMANTES[k];
+      if (k === 'auditor' && !f.nombre && a.auditorLider) f.nombre = a.auditorLider;
+    });
+    return a.firmas;
+  }
+  function imgSegura(src) { return typeof src === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+\/=]+$/.test(src) ? src : ''; }
+  function panelFirmas(a) {
+    var F = firmas(a);
+    var h = '<section class="panel no-print"><h2>✍ Firmas</h2><p class="muted small">Sube la imagen de la firma (PNG o JPG, de preferencia sobre fondo blanco) o dibújala con el mouse o con el dedo. Aparecerá en el informe, en el PDF y en los archivos enviados.</p><div class="firma-grid">';
+    Object.keys(FIRMANTES).forEach(function (k) {
+      var f = F[k], img = imgSegura(f.img);
+      h += '<div class="firma-card"><div class="grid2">' +
+        '<label class="field"><span>Nombre</span><input data-firma="' + k + '" data-k="nombre" value="' + esc(f.nombre) + '" placeholder="Nombre completo"></label>' +
+        '<label class="field"><span>Cargo</span><input data-firma="' + k + '" data-k="cargo" value="' + esc(f.cargo) + '"></label></div>';
+      if (ui.pad === k) {
+        h += '<canvas class="pad" id="pad" width="600" height="220" aria-label="Área para dibujar la firma"></canvas>' +
+          '<div class="actions"><button class="btn sm" data-action="pad-limpiar">Limpiar</button><button class="btn sm" data-action="pad-cancelar">Cancelar</button>' +
+          '<button class="btn sm primary" data-action="pad-usar" data-k="' + k + '">Usar esta firma</button></div>';
+      } else {
+        h += '<div class="firma-prev">' + (img ? '<img src="' + img + '" alt="Firma de ' + esc(f.nombre || FIRMANTES[k]) + '">' : '<span class="muted small">Sin firma</span>') + '</div>' +
+          '<div class="actions"><label class="btn sm">Subir imagen<input type="file" accept="image/png,image/jpeg" hidden data-firma-file="' + k + '"></label>' +
+          '<button class="btn sm" data-action="pad-abrir" data-k="' + k + '">Dibujar</button>' +
+          (img ? '<button class="btn sm danger-t" data-action="firma-quitar" data-k="' + k + '">Quitar</button><span class="small muted">Firmado el ' + fecha(f.fecha) + '</span>' : '') + '</div>';
+      }
+      h += '</div>';
+    });
+    return h + '</div></section>';
+  }
+  // Recorta los bordes vacíos y vuelve transparente el fondo blanco.
+  function procesarFirma(canvas, quitarBlanco) {
+    var ctx = canvas.getContext('2d'), w = canvas.width, hh = canvas.height;
+    var d = ctx.getImageData(0, 0, w, hh), px = d.data, minX = w, minY = hh, maxX = -1, maxY = -1;
+    for (var y = 0; y < hh; y++) for (var x = 0; x < w; x++) {
+      var i = (y * w + x) * 4;
+      if (quitarBlanco && px[i] > 225 && px[i + 1] > 225 && px[i + 2] > 225) px[i + 3] = 0;
+      if (px[i + 3] > 20) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    }
+    if (maxX < 0) return '';
+    ctx.putImageData(d, 0, 0);
+    var pad = 6, cx = Math.max(0, minX - pad), cy = Math.max(0, minY - pad);
+    var cw = Math.min(w, maxX + pad) - cx, ch = Math.min(hh, maxY + pad) - cy;
+    var out = document.createElement('canvas'); out.width = cw; out.height = ch;
+    out.getContext('2d').drawImage(canvas, cx, cy, cw, ch, 0, 0, cw, ch);
+    return out.toDataURL('image/png');
+  }
+  function cargarFirma(file, k) {
+    var a = currentAud();
+    if (!file || !/^image\/(png|jpeg)$/.test(file.type)) { toast('Usa una imagen PNG o JPG'); return; }
+    if (file.size > 8 * 1024 * 1024) { toast('La imagen es muy pesada (máx. 8 MB)'); return; }
+    var url = URL.createObjectURL(file), im = new Image();
+    im.onload = function () {
+      var sc = Math.min(1, 600 / im.width, 240 / im.height);
+      var c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.width * sc)); c.height = Math.max(1, Math.round(im.height * sc));
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      var data = procesarFirma(c, true);
+      if (!data) { toast('No se detectó una firma en la imagen'); return; }
+      var f = firmas(a)[k]; f.img = data; f.fecha = hoy(); touch(a); save(true); rerender(); toast('Firma agregada');
+    };
+    im.onerror = function () { toast('No se pudo leer la imagen'); };
+    im.src = url;
+  }
+  var padDibujado = false;
+  function iniciarPad() {
+    var c = document.getElementById('pad'); if (!c) return;
+    var ctx = c.getContext('2d'), dibujando = false;
+    padDibujado = false;
+    ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0f1d40';
+    function pos(e) { var r = c.getBoundingClientRect(); return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height]; }
+    c.addEventListener('pointerdown', function (e) { dibujando = true; c.setPointerCapture(e.pointerId); var p = pos(e); ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + .1, p[1] + .1); ctx.stroke(); padDibujado = true; e.preventDefault(); });
+    c.addEventListener('pointermove', function (e) { if (!dibujando) return; var p = pos(e); ctx.lineTo(p[0], p[1]); ctx.stroke(); e.preventDefault(); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) { c.addEventListener(ev, function () { dibujando = false; }); });
+  }
+
+  // ---------- Correo ----------
+  function correo(a) {
+    a.correo = a.correo || {};
+    var m = a.correo;
+    if (m.pdf == null) m.pdf = true;
+    if (m.csv == null) m.csv = true;
+    m.historial = m.historial || [];
+    if (!m.asuntoEditado) m.asunto = 'Informe de auditoría ' + (a.codigo || '') + ' – ' + (a.titulo || '');
+    if (!m.mensajeEditado) m.mensaje = mensajeCorreo(a);
+    return m;
+  }
+  function adjuntosNombres(a) {
+    var m = a.correo || {}, out = [];
+    if (m.pdf !== false) out.push([baseNombre(a) + '_informe.pdf', 'Informe de auditoría']);
+    if (m.csv !== false) out.push([baseNombre(a) + '_resultados.csv', 'Detalle de resultados (se abre en Excel)']);
+    return out;
+  }
+  function mensajeCorreo(a) {
+    var s = stats(a), nv = nivel(s.pct), c = conteoTipos(hallazgos(a)), f = firmas(a).auditor;
+    var periodo = a.fechaInicio && a.fechaFin && a.fechaInicio !== a.fechaFin ? 'del ' + fecha(a.fechaInicio) + ' al ' + fecha(a.fechaFin) : 'el ' + fecha(a.fechaInicio || a.fechaFin);
+    var adj = adjuntosNombres(a);
+    var t = 'Estimados(as):\n\n' +
+      'Por medio del presente, remito el informe de la auditoría ' + (a.codigo || '') + ' «' + (a.titulo || '') + '», realizada ' + periodo + (a.area ? ' en el área ' + a.area : '') + '.\n\n' +
+      'Resultado general: ' + (s.pct == null ? 'sin evaluar' : s.pct + '% de cumplimiento (' + nv.t.toLowerCase() + ')') +
+      ', con ' + c.NCM + ' no conformidad(es) mayor(es), ' + c.NCm + ' no conformidad(es) menor(es), ' + c.OBS + ' observación(es) y ' + c.OM + ' oportunidad(es) de mejora.\n\n';
+    if (adj.length) t += (adj.length > 1 ? 'Se adjuntan los siguientes archivos:\n' : 'Se adjunta el siguiente archivo:\n') + adj.map(function (x) { return '• ' + x[0] + ' – ' + x[1]; }).join('\n') + '\n\n';
+    if (a.onedrive && a.onedrive.url) t += 'También pueden consultarse en OneDrive: ' + a.onedrive.url + '\n\n';
+    if (c.NCM + c.NCm > 0) t += 'Agradeceré revisar los hallazgos y remitir el plan de acción correctivo en el plazo acordado.\n\n';
+    t += 'Quedo atento(a) a sus comentarios.\n\nSaludos cordiales,\n' + (f.nombre || a.auditorLider || '') + (f.cargo ? '\n' + f.cargo : '') + (a.organizacion ? '\n' + a.organizacion : '');
+    return t;
+  }
+  function listaCorreos(txt) { return String(txt || '').split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean); }
+  function correoValido(x) { return /^[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}$/i.test(x); }
+  function panelCorreo(a) {
+    var m = correo(a), od = window.OneDrive && OneDrive.configurado();
+    var h = '<section class="panel no-print correo"><h2>✉ Enviar por correo</h2>' +
+      '<div class="grid2"><label class="field"><span>Para *</span><input type="text" inputmode="email" data-correo="para" value="' + esc(m.para) + '" placeholder="jefa@detecta.pe, calidad@detecta.pe"></label>' +
+      '<label class="field"><span>CC</span><input type="text" inputmode="email" data-correo="cc" value="' + esc(m.cc) + '" placeholder="Opcional"></label></div>' +
+      '<p class="small muted hint">Separa varios correos con coma.</p>' +
+      '<label class="field"><span>Asunto</span><input data-correo="asunto" value="' + esc(m.asunto) + '"></label>' +
+      '<label class="field"><span>Mensaje</span><textarea rows="12" data-correo="mensaje">' + esc(m.mensaje) + '</textarea></label>' +
+      '<div class="adj-row"><span class="small"><b>Adjuntar:</b></span>' +
+      '<label class="check"><input type="checkbox" data-correo-adj="pdf"' + (m.pdf !== false ? ' checked' : '') + '> Informe (PDF)</label>' +
+      '<label class="check"><input type="checkbox" data-correo-adj="csv"' + (m.csv !== false ? ' checked' : '') + '> Resultados (Excel .csv)</label>' +
+      ((m.asuntoEditado || m.mensajeEditado) ? '<button class="btn sm" data-action="correo-reset">Restablecer texto automático</button>' : '') + '</div>' +
+      '<div class="actions end">' +
+      '<button class="btn" data-action="correo-mailto" data-id="' + a.id + '"' + (ui.correoBusy ? ' disabled' : '') + '>Abrir en mi correo</button>' +
+      (od ? '<button class="btn primary" data-action="correo-outlook" data-id="' + a.id + '"' + (ui.correoBusy ? ' disabled' : '') + '>' + (ui.correoBusy ? 'Enviando…' : 'Enviar con Outlook') + '</button>' : '') + '</div>' +
+      '<p class="small muted">' + (od ? '<b>Enviar con Outlook</b> lo envía desde tu cuenta de Microsoft 365 con los archivos adjuntos. ' : '') +
+      '<b>Abrir en mi correo</b> descarga los archivos y abre tu correo con el mensaje listo: solo arrastra los archivos descargados al correo.' +
+      (od ? '' : ' Para enviarlo directamente con los adjuntos, conecta el sistema con Microsoft en la sección <a href="#/onedrive">OneDrive</a>.') + '</p>';
+    if (m.historial.length) {
+      h += '<div class="hist"><b class="small">Envíos realizados</b><ul>' + m.historial.slice().reverse().map(function (x) {
+        return '<li class="small">' + hora(x.fecha) + ' · ' + esc(x.via) + ' · para ' + esc(x.para.join(', ')) + (x.cc && x.cc.length ? ' (CC ' + esc(x.cc.join(', ')) + ')' : '') + '</li>';
+      }).join('') + '</ul></div>';
+    }
+    return h + '</section>';
+  }
+  function validarCorreo(a) {
+    var m = correo(a), para = listaCorreos(m.para), cc = listaCorreos(m.cc);
+    var malos = para.concat(cc).filter(function (x) { return !correoValido(x); });
+    if (!para.length) { toast('Escribe al menos un correo en «Para»', 4000); return null; }
+    if (malos.length) { toast('Revisa estos correos: ' + malos.join(', '), 6000); return null; }
+    return { para: para, cc: cc, asunto: m.asunto, mensaje: m.mensaje };
+  }
+  function blobB64(blob) {
+    return new Promise(function (ok, fail) { var fr = new FileReader(); fr.onload = function () { ok(String(fr.result).split(',')[1]); }; fr.onerror = fail; fr.readAsDataURL(blob); });
+  }
+  function archivosCorreo(a) {
+    var m = correo(a), out = [], p = Promise.resolve();
+    if (m.pdf !== false) p = p.then(function () { return generarPDF(a); }).then(function (b) { out.push({ nombre: baseNombre(a) + '_informe.pdf', tipo: 'application/pdf', blob: b }); });
+    if (m.csv !== false) p = p.then(function () { out.push({ nombre: baseNombre(a) + '_resultados.csv', tipo: 'text/csv', blob: new Blob(['\ufeff' + csvText(a)], { type: 'text/csv' }) }); });
+    return p.then(function () { return out; });
+  }
+  function enviarOutlook(a) {
+    var datos = validarCorreo(a); if (!datos) return;
+    ui.correoBusy = true; rerender();
+    var paso = OneDrive.cuenta() ? Promise.resolve() : OneDrive.login();
+    paso.then(function () { return archivosCorreo(a); }).then(function (files) {
+      return Promise.all(files.map(function (f) { return blobB64(f.blob).then(function (b64) { return { nombre: f.nombre, tipo: f.tipo, base64: b64 }; }); }));
+    }).then(function (adj) {
+      var total = adj.reduce(function (n, f) { return n + f.base64.length; }, 0);
+      if (total > 3400000) throw new Error('Los adjuntos superan el límite de Outlook (3 MB). Guarda la auditoría en OneDrive y envía el enlace, o usa «Abrir en mi correo».');
+      datos.adjuntos = adj;
+      return OneDrive.enviarCorreo(datos).then(function () { return adj; });
+    }).then(function (adj) {
+      correo(a).historial.push({ fecha: new Date().toISOString(), via: 'Outlook', para: datos.para, cc: datos.cc, adjuntos: adj.map(function (f) { return f.nombre; }) });
+      ui.correoBusy = false; touch(a); save(true); rerender(); toast('Correo enviado a ' + datos.para.join(', '), 5000);
+    }).catch(function (err) {
+      ui.correoBusy = false; rerender(); toast(err.message || 'No se pudo enviar el correo', 8000);
+    });
+  }
+  function abrirCorreo(a) {
+    var datos = validarCorreo(a); if (!datos) return;
+    ui.correoBusy = true; rerender();
+    archivosCorreo(a).then(function (files) {
+      files.forEach(function (f, i) { setTimeout(function () { download(f.nombre, f.blob, f.tipo); }, i * 400); });
+      var q = [];
+      if (datos.cc.length) q.push('cc=' + encodeURIComponent(datos.cc.join(',')));
+      q.push('subject=' + encodeURIComponent(datos.asunto));
+      q.push('body=' + encodeURIComponent(datos.mensaje));
+      setTimeout(function () { window.location.href = 'mailto:' + datos.para.map(encodeURIComponent).join(',') + '?' + q.join('&'); }, files.length * 400 + 200);
+      correo(a).historial.push({ fecha: new Date().toISOString(), via: 'Mi correo', para: datos.para, cc: datos.cc, adjuntos: files.map(function (f) { return f.nombre; }) });
+      ui.correoBusy = false; touch(a); save(true); rerender();
+      toast(files.length ? 'Archivos descargados. Adjúntalos al correo que se abrió.' : 'Se abrió tu correo con el mensaje.', 7000);
+    }).catch(function (err) { ui.correoBusy = false; rerender(); toast(err.message || 'No se pudo preparar el correo', 7000); });
+  }
+
+  // ---------- PDF ----------
+  var h2pCarga = null;
+  function cargarH2P() {
+    if (window.html2pdf) return Promise.resolve();
+    if (h2pCarga) return h2pCarga;
+    h2pCarga = new Promise(function (ok, fail) {
+      var sc = document.createElement('script'); sc.src = 'js/vendor/html2pdf.bundle.min.js';
+      sc.onload = ok; sc.onerror = function () { h2pCarga = null; fail(new Error('No se pudo cargar el generador de PDF')); };
+      document.head.appendChild(sc);
+    });
+    return h2pCarga;
+  }
+  function generarPDF(a) {
+    var y0 = window.scrollY, x0 = window.scrollX;
+    return cargarH2P().then(function () {
+      var el = document.createElement('div');
+      el.className = 'pdf-light';
+      el.innerHTML = reporte(a, stats(a));
+      window.scrollTo(0, 0);
+      return window.html2pdf().set({
+        margin: [10, 10, 12, 10],
+        filename: baseNombre(a) + '_informe.pdf',
+        image: { type: 'jpeg', quality: 0.9 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, scrollX: 0, scrollY: 0 },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.kpi', '.firmas', 'h2', '.rep-head'] }
+      }).from(el).outputPdf('blob');
+    }).then(function (blob) { window.scrollTo(x0, y0); return blob; }, function (err) { window.scrollTo(x0, y0); throw err; });
+  }
+  function rerender() { var y = window.scrollY; render(); window.scrollTo(0, y); }
   function reporte(a, s) {
     var hs = hallazgos(a), c = conteoTipos(hs), nv = nivel(s.pct);
     var h = '<article class="report">' +
@@ -449,7 +672,13 @@
       });
       h += '</tbody></table>';
     }
-    h += '<div class="firmas"><div><span></span>Auditor líder<br><b>' + esc(a.auditorLider) + '</b></div><div><span></span>Responsable del área auditada</div></div>' +
+    var F = firmas(a);
+    h += '<div class="firmas">' + Object.keys(FIRMANTES).map(function (k) {
+      var f = F[k], img = imgSegura(f.img);
+      return '<div>' + (img ? '<img class="firma-img" src="' + img + '" alt="Firma">' : '<div class="firma-space"></div>') +
+        '<span></span><b>' + esc(f.nombre || '') + '</b><br>' + esc(f.cargo || FIRMANTES[k]) +
+        (img && f.fecha ? '<br><small class="muted">Firmado el ' + fecha(f.fecha) + '</small>' : '') + '</div>';
+    }).join('') + '</div>' +
       '<p class="small muted rep-foot">Generado con AuditaProcesos con Detecto · ' + fecha(hoy()) + '</p></article>';
     return h;
   }
@@ -566,6 +795,27 @@
       case 'csv': exportCSV(getAud(id)); break;
       case 'informe-html': { var ia = getAud(id); informeHTML(ia).then(function (html) { download(baseNombre(ia) + '_informe.html', html, 'text/html'); }); break; }
       case 'od-guardar': guardarOneDrive(getAud(id)); break;
+      case 'pdf': {
+        var pa = getAud(id); b.disabled = true; b.textContent = 'Generando PDF…';
+        generarPDF(pa).then(function (blob) { download(baseNombre(pa) + '_informe.pdf', blob, 'application/pdf'); })
+          .catch(function (err) { toast(err.message || 'No se pudo generar el PDF', 6000); })
+          .then(function () { b.disabled = false; b.textContent = 'Descargar PDF'; });
+        break;
+      }
+      case 'pad-abrir': ui.pad = b.getAttribute('data-k'); rerender(); break;
+      case 'pad-cancelar': ui.pad = null; rerender(); break;
+      case 'pad-limpiar': { var pc = document.getElementById('pad'); pc.getContext('2d').clearRect(0, 0, pc.width, pc.height); padDibujado = false; break; }
+      case 'pad-usar': {
+        var cv = document.getElementById('pad');
+        var dataF = padDibujado ? procesarFirma(cv, false) : '';
+        if (!dataF) { toast('Dibuja tu firma primero'); break; }
+        var ff = firmas(a)[b.getAttribute('data-k')]; ff.img = dataF; ff.fecha = hoy();
+        ui.pad = null; touch(a); save(true); rerender(); toast('Firma agregada'); break;
+      }
+      case 'firma-quitar': { var fq = firmas(a)[b.getAttribute('data-k')]; delete fq.img; delete fq.fecha; touch(a); rerender(); break; }
+      case 'correo-reset': { var cr = correo(a); cr.asuntoEditado = false; cr.mensajeEditado = false; touch(a); rerender(); break; }
+      case 'correo-outlook': enviarOutlook(getAud(id)); break;
+      case 'correo-mailto': abrirCorreo(getAud(id)); break;
       case 'od-login':
         OneDrive.login().then(function () { render(); toast('Conectado a Microsoft'); }).catch(function (err) { toast(err.message || 'No se pudo iniciar sesión', 6000); });
         break;
@@ -649,6 +899,16 @@
       var acc = a.acciones[hid] || (a.acciones[hid] = { estado: 'Pendiente' });
       acc[t.getAttribute('data-k')] = t.value; touch(a);
       if (e.type === 'change' && t.tagName === 'SELECT') { var y = window.scrollY; render(); window.scrollTo(0, y); }
+    } else if (t.hasAttribute('data-firma')) {
+      a = currentAud(); firmas(a)[t.getAttribute('data-firma')][t.getAttribute('data-k')] = t.value; touch(a); refrescarVista(a);
+    } else if (t.hasAttribute('data-correo')) {
+      a = currentAud(); var mc = correo(a), kc = t.getAttribute('data-correo');
+      mc[kc] = t.value;
+      if (kc === 'asunto') mc.asuntoEditado = true;
+      if (kc === 'mensaje') mc.mensajeEditado = true;
+      touch(a);
+    } else if (t.hasAttribute('data-correo-adj') && e.type === 'change') {
+      a = currentAud(); correo(a)[t.getAttribute('data-correo-adj')] = t.checked; touch(a); rerender();
     } else if (t.hasAttribute('data-afield')) {
       a = currentAud(); a[t.getAttribute('data-afield')] = t.value; touch(a);
     } else if (t.hasAttribute('data-d') && ui.draft) {
@@ -661,7 +921,19 @@
     }
   }
   app.addEventListener('input', function (e) { if (e.target.tagName !== 'SELECT' && e.target.type !== 'checkbox') onField(e); });
-  app.addEventListener('change', function (e) { if (e.target.tagName === 'SELECT' || e.target.type === 'checkbox') onField(e); });
+  app.addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.tagName === 'SELECT' || t.type === 'checkbox') onField(e);
+    else if (t.hasAttribute('data-firma-file')) cargarFirma(t.files[0], t.getAttribute('data-firma-file'));
+  });
+  // Actualiza la vista previa del informe y el texto automático del correo sin redibujar los formularios.
+  function refrescarVista(a) {
+    var r = app.querySelector('.report');
+    if (r) { var tmp = document.createElement('div'); tmp.innerHTML = reporte(a, stats(a)); r.replaceWith(tmp.firstChild); }
+    var m = correo(a), ta = app.querySelector('textarea[data-correo=mensaje]'), as = app.querySelector('input[data-correo=asunto]');
+    if (ta && !m.mensajeEditado && document.activeElement !== ta) ta.value = m.mensaje;
+    if (as && !m.asuntoEditado && document.activeElement !== as) as.value = m.asunto;
+  }
 
   app.addEventListener('submit', function (e) {
     if (e.target.id === 'form-od') {
@@ -807,13 +1079,16 @@
     if (!a.codigo) { a.codigo = siguienteCodigo((a.fechaInicio || '').slice(0, 4) || undefined); touch(a); }
     ui.odBusy = true; render();
     var paso = OneDrive.cuenta() ? Promise.resolve() : OneDrive.login();
-    paso.then(function () { return informeHTML(a); }).then(function (html) {
+    var pdf = null;
+    paso.then(function () { return generarPDF(a).then(function (b) { pdf = b; }, function () { pdf = null; }); })
+      .then(function () { return informeHTML(a); }).then(function (html) {
       var anio = (a.fechaInicio || hoy()).slice(0, 4);
-      return OneDrive.guardar([anio, a.codigo + ' ' + (a.titulo || 'Auditoría')], [
+      var extra = pdf ? [{ nombre: a.codigo + '_informe.pdf', contenido: pdf, tipo: 'application/pdf' }] : [];
+      return OneDrive.guardar([anio, a.codigo + ' ' + (a.titulo || 'Auditoría')], extra.concat([
         { nombre: a.codigo + '_respaldo.json', contenido: jsonAud(a), tipo: 'application/json' },
         { nombre: a.codigo + '_resultados.csv', contenido: '\ufeff' + csvText(a), tipo: 'text/csv' },
         { nombre: a.codigo + '_informe.html', contenido: html, tipo: 'text/html' }
-      ]);
+      ]));
     }).then(function (r) {
       a.onedrive = { ruta: r.ruta, url: r.url, fecha: new Date().toISOString(), por: (OneDrive.cuenta() || {}).correo || '' };
       ui.odBusy = false; touch(a); save(true); render(); toast('Guardada en OneDrive: ' + r.ruta, 5000);
@@ -867,7 +1142,7 @@
       '<li>Nombre: <i>AuditaProcesos</i>. Tipos de cuenta: <b>Solo cuentas de este directorio organizativo</b>.</li>' +
       '<li>URI de redirección: plataforma <b>Aplicación de página única (SPA)</b> con esta dirección exacta:<br><code class="copy">' + esc(window.OneDrive ? OneDrive.redirectUri() : '') + '</code></li>' +
       '<li>Pulsa <b>Registrar</b> y copia el <b>Id. de aplicación (cliente)</b> y el <b>Id. de directorio (inquilino)</b>.</li>' +
-      '<li>En <b>Permisos de API › Microsoft Graph › Permisos delegados</b> agrega <code>User.Read</code> y <code>Files.ReadWrite</code>. Si usarán SharePoint, agrega también <code>Files.ReadWrite.All</code> y <code>Sites.Read.All</code>. Luego pulsa <b>Conceder consentimiento de administrador</b>.</li>' +
+      '<li>En <b>Permisos de API › Microsoft Graph › Permisos delegados</b> agrega <code>User.Read</code>, <code>Files.ReadWrite</code> y <code>Mail.Send</code> (para enviar el informe por correo). Si usarán SharePoint, agrega también <code>Files.ReadWrite.All</code> y <code>Sites.Read.All</code>. Luego pulsa <b>Conceder consentimiento de administrador</b>.</li>' +
       '<li>Pega los dos ID arriba, o ponlos en <code>js/config.js</code> del repositorio para que todos los auditores lo tengan listo.</li></ol>' +
       '<p class="small muted">El sistema solo guarda y lee archivos en la carpeta indicada, usando la sesión de cada auditor. No hay servidores intermedios.</p></details>';
     return h;

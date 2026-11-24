@@ -11,7 +11,7 @@ La metodología sigue las 5 etapas de la **ISO 19011**:
 | 1. Planificación | Defines el objetivo, el alcance, los criterios, el equipo, las fechas y los procesos a auditar |
 | 2. Lista de verificación | Marcas cada requisito como *Cumple / Parcial / No cumple / N/A* y registras la evidencia objetiva |
 | 3. Hallazgos | Se generan solos y los clasificas como NC mayor, NC menor, observación u oportunidad de mejora |
-| 4. Informe | Informe automático con % de cumplimiento, hallazgos, conclusiones y firmas → PDF / Excel |
+| 4. Informe | Informe automático con % de cumplimiento, hallazgos y conclusiones. Firmas (imagen o dibujadas) y envío por correo con el PDF y el Excel adjuntos |
 | 5. Seguimiento | Plan de acción: causa raíz, acción correctiva, responsable, fecha y estado |
 
 ## Plantillas incluidas
@@ -41,6 +41,7 @@ Cada auditoría tiene un **código** (por ejemplo `AUD-2026-01`) y un botón **�
 Auditorías/
 └── 2026/
     └── AUD-2026-01 Auditoría interna procesos ambulatorios/
+        ├── AUD-2026-01_informe.pdf       ← informe firmado en PDF
         ├── AUD-2026-01_respaldo.json     ← para reabrir la auditoría en el sistema
         ├── AUD-2026-01_resultados.csv    ← se abre en Excel
         └── AUD-2026-01_informe.html      ← informe completo (se abre en el navegador y se imprime en PDF)
@@ -55,10 +56,19 @@ Desde la sección **OneDrive** del sistema se pueden buscar y abrir las auditor�
 3. URI de redirección: plataforma **Aplicación de página única (SPA)** con
    `https://fabriziolazarocasas1122-commits.github.io/Auditorprocesos/auth.html`
 4. Copia el **Id. de aplicación (cliente)** y el **Id. de directorio (inquilino)**.
-5. **Permisos de API › Microsoft Graph › Permisos delegados**: `User.Read`, `Files.ReadWrite`. Si guardarán en un sitio de SharePoint compartido, también `Files.ReadWrite.All` y `Sites.Read.All`. Pulsa **Conceder consentimiento de administrador**.
+5. **Permisos de API › Microsoft Graph › Permisos delegados**: `User.Read`, `Files.ReadWrite` y `Mail.Send` (para enviar el informe por correo desde Outlook). Si guardarán en un sitio de SharePoint compartido, también `Files.ReadWrite.All` y `Sites.Read.All`. Pulsa **Conceder consentimiento de administrador**.
 6. Pega los ID en `js/config.js` (así todos los auditores lo tienen listo) o en la sección **OneDrive** del sistema.
 
 Para que todo el equipo guarde en una carpeta común del área de Calidad, llena `sharepoint` en `js/config.js` (por ejemplo `detecta.sharepoint.com/sites/Calidad`).
+
+## Firmas y envío por correo
+
+En la etapa **4. Informe**:
+
+- **Firmas:** para el auditor líder y el responsable del área. Se puede **subir una imagen** (PNG o JPG; el fondo blanco se vuelve transparente) o **dibujarla** con el mouse o con el dedo. Aparecen en el informe, en el PDF y en los archivos enviados.
+- **Enviar por correo:** escribe los destinatarios (Para y CC), el asunto y el mensaje. El mensaje se redacta solo con el resultado de la auditoría e indica qué archivos van adjuntos (informe PDF y resultados en Excel).
+  - **Enviar con Outlook:** lo envía desde la cuenta Microsoft 365 del auditor con los archivos adjuntos (requiere la conexión con Microsoft y el permiso `Mail.Send`).
+  - **Abrir en mi correo:** descarga los archivos y abre el programa de correo con el mensaje listo; solo hay que adjuntar los archivos descargados.
 
 ## Cómo se guardan los datos
 
@@ -89,7 +99,7 @@ js/plantillas.js    Plantillas base de las listas de verificación
 js/app.js           Lógica de la aplicación
 js/config.js        Configuración de OneDrive de la organización
 js/onedrive.js      Conexión con OneDrive/SharePoint (Microsoft Graph)
-js/vendor/          Librería oficial de inicio de sesión de Microsoft (MSAL, licencia MIT)
+js/vendor/          MSAL (inicio de sesión de Microsoft) y html2pdf (generación de PDF), ambas con licencia MIT
 auth.html           Página de retorno del inicio de sesión de Microsoft
 img/                Mascota Detecto (logo e ilustraciones)
 ```

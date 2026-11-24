@@ -64,16 +64,17 @@
   }
   function cuenta() { return account ? { nombre: account.name || account.username, correo: account.username } : null; }
 
-  function token() {
+  function token(sc) {
+    sc = sc || scopes();
     return init().then(function () {
-      if (!account) return login().then(function () { return token(); });
-      return pca.acquireTokenSilent({ scopes: scopes(), account: account }).then(function (r) { return r.accessToken; })
-        .catch(function () { return pca.acquireTokenPopup({ scopes: scopes(), account: account }).then(function (r) { return r.accessToken; }); });
+      if (!account) return login().then(function () { return token(sc); });
+      return pca.acquireTokenSilent({ scopes: sc, account: account }).then(function (r) { return r.accessToken; })
+        .catch(function () { return pca.acquireTokenPopup({ scopes: sc, account: account }).then(function (r) { return r.accessToken; }); });
     });
   }
 
-  function graph(method, path, body, contentType) {
-    return token().then(function (t) {
+  function graph(method, path, body, contentType, sc) {
+    return token(sc).then(function (t) {
       var h = { Authorization: 'Bearer ' + t };
       if (contentType) h['Content-Type'] = contentType;
       return fetch(path.indexOf('http') === 0 ? path : GRAPH + path, { method: method, headers: h, body: body });
@@ -88,6 +89,7 @@
   }
   function mensajeError(status, j) {
     var code = j && j.error && j.error.code;
+    if ((status === 401 || status === 403) && /mail/i.test(JSON.stringify(j || {}))) return 'Microsoft no dio permiso para enviar correos (falta el permiso Mail.Send). Pide a Sistemas que lo agregue.';
     if (status === 401 || status === 403) return 'Microsoft no dio permiso para acceder a la carpeta (' + (code || status) + '). Puede que Sistemas deba aprobar los permisos.';
     if (status === 404) return 'No se encontró la carpeta o el sitio de SharePoint configurado.';
     return 'Error de OneDrive: ' + ((j && j.error && j.error.message) || status);
@@ -159,7 +161,27 @@
       .then(function (res) { if (!res.ok) throw new Error('No se pudo descargar el archivo.'); return res.json(); });
   }
 
+  /* Envía un correo desde la cuenta del auditor (Outlook / Microsoft 365).
+   * m: { para: [], cc: [], asunto, mensaje, adjuntos: [{ nombre, tipo, base64 }] } */
+  function enviarCorreo(m) {
+    var dir = function (lista) { return lista.map(function (x) { return { emailAddress: { address: x } }; }); };
+    var cuerpo = {
+      message: {
+        subject: m.asunto,
+        body: { contentType: 'Text', content: m.mensaje },
+        toRecipients: dir(m.para),
+        ccRecipients: dir(m.cc || []),
+        attachments: (m.adjuntos || []).map(function (f) {
+          return { '@odata.type': '#microsoft.graph.fileAttachment', name: f.nombre, contentType: f.tipo, contentBytes: f.base64 };
+        })
+      },
+      saveToSentItems: true
+    };
+    return graph('POST', '/me/sendMail', JSON.stringify(cuerpo), 'application/json', ['User.Read', 'Mail.Send']);
+  }
+
   window.OneDrive = {
+    enviarCorreo: enviarCorreo,
     setConfig: setConfig, configurado: configurado, init: init, login: login, logout: logout, cuenta: cuenta,
     guardar: guardar, listar: listar, descargar: descargar, redirectUri: function () { return baseDir() + 'auth.html'; }
   };
